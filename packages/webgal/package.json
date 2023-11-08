@@ -3,10 +3,10 @@
   "private": true,
   "version": "4.4.5",
   "scripts": {
-    "dev": "vite --host --port 3000",
-    "build": "cross-env NODE_ENV=production tsc && vite build --base=./",
-    "preview": "vite preview",
-    "lint": "eslint src/** --fix"
+    "dev": "bunx --bun vite --host --port 3000",
+    "build": "bunx --bun cross-env NODE_ENV=production tsc && vite build --base=./",
+    "preview": "bunx --bun vite preview",
+    "lint": "bunx --bun eslint src/** --fix"
   },
   "dependencies": {
     "@icon-park/react": "^1.4.2",

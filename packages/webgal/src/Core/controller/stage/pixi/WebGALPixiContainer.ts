@@ -1,9 +1,9 @@
-import { OldFilmFilter } from '@pixi/filter-old-film';
-import { DotFilter } from '@pixi/filter-dot';
-import { ReflectionFilter } from '@pixi/filter-reflection';
-import { GlitchFilter } from '@pixi/filter-glitch';
-import { RGBSplitFilter } from '@pixi/filter-rgb-split';
-import { GodrayFilter } from '@pixi/filter-godray';
+import { OldFilmFilter } from 'pixi-filters';
+import { DotFilter } from 'pixi-filters';
+import { ReflectionFilter } from 'pixi-filters';
+import { GlitchFilter } from 'pixi-filters';
+import { RGBSplitFilter } from 'pixi-filters';
+import { GodrayFilter } from 'pixi-filters';
 import * as PIXI from 'pixi.js';
 
 export class WebGALPixiContainer extends PIXI.Container {
