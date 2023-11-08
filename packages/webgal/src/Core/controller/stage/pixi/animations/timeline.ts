@@ -1,6 +1,8 @@
 import { ITransform } from '@/store/stageInterface';
 import { gsap } from 'gsap';
 import { WebGAL } from '@/Core/WebGAL';
+import { webgalStore } from '@/store/store';
+import { stageActions } from '@/store/stageReducer';
 
 /**
  * 动画创建模板
@@ -40,13 +42,16 @@ export function generateTimelineObj(
       /**
        * filters
        */
-      const { alpha, rotation, blur, duration, scale, position, pivot, ...rest } = gsapEffect;
+      const { alpha, rotation, blur, duration, scale, position, ...rest } = gsapEffect;
       gsapTimeline4.to(target.pixiContainer, {
         ...rest,
         duration: gsapEffectDuration,
       });
     }
   }
+
+  const { duration: sliceDuration, ...endState } = getEndStateEffect();
+  webgalStore.dispatch(stageActions.updateEffect({ target: targetKey, transform: endState }));
 
   /**
    * 在此书写为动画设置初态的操作
@@ -78,8 +83,12 @@ export function generateTimelineObj(
 
   function getEndFilterEffect() {
     const gsapEffect = timeline[timeline.length - 1];
-    const { alpha, rotation, blur, duration, scale, position, pivot, ...rest } = gsapEffect;
+    const { alpha, rotation, blur, duration, scale, position, ...rest } = gsapEffect;
     return rest;
+  }
+
+  function getEndStateEffect() {
+    return timeline[timeline.length - 1];
   }
 
   return {

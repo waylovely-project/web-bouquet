@@ -1,12 +1,14 @@
 import * as PIXI from 'pixi.js';
 import { v4 as uuid } from 'uuid';
 import { webgalStore } from '@/store/store';
-import { setStage } from '@/store/stageReducer';
+import { setStage, stageActions } from '@/store/stageReducer';
 import cloneDeep from 'lodash/cloneDeep';
 import { IEffect, IFigureAssociatedAnimation } from '@/store/stageInterface';
 import { logger } from '@/Core/util/etc/logger';
 import { isIOS } from '@/Core/initializeScript';
 import { WebGALPixiContainer } from '@/Core/controller/stage/pixi/WebGALPixiContainer';
+import { WebGAL } from '@/Core/WebGAL';
+// import { figureCash } from '@/Core/gameScripts/function/conentsCash'; // 如果要使用 Live2D，取消这里的注释
 // import { Live2DModel, SoundManager } from 'pixi-live2d-display'; // 如果要使用 Live2D，取消这里的注释
 
 export interface IAnimationObject {
@@ -31,9 +33,15 @@ export interface IStageObject {
   uuid: string;
   // 一般与作用目标有关
   key: string;
-  pixiContainer: PIXI.Container;
+  pixiContainer: WebGALPixiContainer;
   // 相关的源 url
   sourceUrl: string;
+}
+
+export interface ILive2DRecord {
+  target: string;
+  motion: string;
+  expression: string;
 }
 
 // export interface IRegisterTickerOpr {
@@ -53,6 +61,7 @@ export default class PixiStage {
   public currentApp: PIXI.Application | null = null;
   public readonly effectsContainer: PIXI.Container;
   public frameDuration = 16.67;
+  public notUpdateBacklogEffects = false;
   private readonly figureContainer: PIXI.Container;
   private figureObjects: Array<IStageObject> = [];
   private readonly backgroundContainer: PIXI.Container;
@@ -62,6 +71,7 @@ export default class PixiStage {
   private stageAnimations: Array<IStageAnimationObject> = [];
   private assetLoader = new PIXI.Loader();
   private loadQueue: { url: string; callback: () => void }[] = [];
+  private live2dFigureRecorder: Array<ILive2DRecord> = [];
 
   // 锁定变换对象（对象可能正在执行动画，不能应用变换）
   private lockTransformTarget: Array<string> = [];
@@ -115,12 +125,18 @@ export default class PixiStage {
     this.backgroundContainer.zIndex = 0;
     app.stage.addChild(this.effectsContainer, this.figureContainer, this.backgroundContainer);
     this.currentApp = app;
-    // 每 5s 获取帧率
+    // 每 5s 获取帧率，并且防 loader 死
     const update = () => {
       this.updateFps();
       setTimeout(update, 10000);
     };
     update();
+    // loader 防死
+    const reload = () => {
+      setTimeout(reload, 500);
+      this.callLoader();
+    };
+    reload();
   }
 
   public getFigureObjects() {
@@ -216,10 +232,10 @@ export default class PixiStage {
               x: target.pixiContainer.scale.x,
               y: target.pixiContainer.scale.y,
             },
-            pivot: {
-              x: target.pixiContainer.pivot.x,
-              y: target.pixiContainer.pivot.y,
-            },
+            // pivot: {
+            //   x: target.pixiContainer.pivot.x,
+            //   y: target.pixiContainer.pivot.y,
+            // },
             position: {
               x: target.pixiContainer.x,
               y: target.pixiContainer.y,
@@ -229,21 +245,12 @@ export default class PixiStage {
             blur: target.pixiContainer.blur,
             ...webgalFilters,
           };
-          const prevEffects = webgalStore.getState().stage.effects;
-          const newEffects = cloneDeep(prevEffects);
           let effect: IEffect = {
             target: thisTickerFunc.targetKey,
             transform: targetTransform,
           };
-          const index = newEffects.findIndex((e) => e.target === thisTickerFunc.targetKey);
-          if (index >= 0) {
-            effect = newEffects[index];
-            effect.transform = targetTransform;
-            newEffects[index] = effect;
-          } else {
-            newEffects.push(effect);
-          }
-          updateCurrentEffects(newEffects);
+          webgalStore.dispatch(stageActions.updateEffect(effect));
+          // if (!this.notUpdateBacklogEffects) updateCurrentBacklogEffects(webgalStore.getState().stage.effects);
         }
       }
       this.stageAnimations.splice(index, 1);
@@ -388,28 +395,32 @@ export default class PixiStage {
 
     // 完成图片加载后执行的函数
     const setup = () => {
-      const texture = loader.resources?.[url]?.texture;
-      if (texture && this.getStageObjByUuid(bgUuid)) {
-        /**
-         * 重设大小
-         */
-        const originalWidth = texture.width;
-        const originalHeight = texture.height;
-        const scaleX = this.stageWidth / originalWidth;
-        const scaleY = this.stageHeight / originalHeight;
-        const targetScale = Math.max(scaleX, scaleY);
-        const bgSprite = new PIXI.Sprite(texture);
-        bgSprite.scale.x = targetScale;
-        bgSprite.scale.y = targetScale;
-        bgSprite.anchor.set(0.5);
-        bgSprite.position.y = this.stageHeight / 2;
-        thisBgContainer.setBaseX(this.stageWidth / 2);
-        thisBgContainer.setBaseY(this.stageHeight / 2);
-        thisBgContainer.pivot.set(0, this.stageHeight / 2);
+      // TODO：找一个更好的解法，现在的解法是无论是否复用原来的资源，都设置一个延时以让动画工作正常！
 
-        // 挂载
-        thisBgContainer.addChild(bgSprite);
-      }
+      setTimeout(() => {
+        const texture = loader.resources?.[url]?.texture;
+        if (texture && this.getStageObjByUuid(bgUuid)) {
+          /**
+           * 重设大小
+           */
+          const originalWidth = texture.width;
+          const originalHeight = texture.height;
+          const scaleX = this.stageWidth / originalWidth;
+          const scaleY = this.stageHeight / originalHeight;
+          const targetScale = Math.max(scaleX, scaleY);
+          const bgSprite = new PIXI.Sprite(texture);
+          bgSprite.scale.x = targetScale;
+          bgSprite.scale.y = targetScale;
+          bgSprite.anchor.set(0.5);
+          bgSprite.position.y = this.stageHeight / 2;
+          thisBgContainer.setBaseX(this.stageWidth / 2);
+          thisBgContainer.setBaseY(this.stageHeight / 2);
+          thisBgContainer.pivot.set(0, this.stageHeight / 2);
+
+          // 挂载
+          thisBgContainer.addChild(bgSprite);
+        }
+      }, 0);
     };
 
     /**
@@ -452,39 +463,42 @@ export default class PixiStage {
 
     // 完成图片加载后执行的函数
     const setup = () => {
-      const texture = loader.resources?.[url]?.texture;
-      if (texture && this.getStageObjByUuid(figureUuid)) {
-        /**
-         * 重设大小
-         */
-        const originalWidth = texture.width;
-        const originalHeight = texture.height;
-        const scaleX = this.stageWidth / originalWidth;
-        const scaleY = this.stageHeight / originalHeight;
-        const targetScale = Math.min(scaleX, scaleY);
-        const figureSprite = new PIXI.Sprite(texture);
-        figureSprite.scale.x = targetScale;
-        figureSprite.scale.y = targetScale;
-        figureSprite.anchor.set(0.5);
-        figureSprite.position.y = this.stageHeight / 2;
-        const targetWidth = originalWidth * targetScale;
-        const targetHeight = originalHeight * targetScale;
-        thisFigureContainer.setBaseY(this.stageHeight / 2);
-        if (targetHeight < this.stageHeight) {
-          thisFigureContainer.setBaseY(this.stageHeight / 2 + this.stageHeight - targetHeight / 2);
+      // TODO：找一个更好的解法，现在的解法是无论是否复用原来的资源，都设置一个延时以让动画工作正常！
+      setTimeout(() => {
+        const texture = loader.resources?.[url]?.texture;
+        if (texture && this.getStageObjByUuid(figureUuid)) {
+          /**
+           * 重设大小
+           */
+          const originalWidth = texture.width;
+          const originalHeight = texture.height;
+          const scaleX = this.stageWidth / originalWidth;
+          const scaleY = this.stageHeight / originalHeight;
+          const targetScale = Math.min(scaleX, scaleY);
+          const figureSprite = new PIXI.Sprite(texture);
+          figureSprite.scale.x = targetScale;
+          figureSprite.scale.y = targetScale;
+          figureSprite.anchor.set(0.5);
+          figureSprite.position.y = this.stageHeight / 2;
+          const targetWidth = originalWidth * targetScale;
+          const targetHeight = originalHeight * targetScale;
+          thisFigureContainer.setBaseY(this.stageHeight / 2);
+          if (targetHeight < this.stageHeight) {
+            thisFigureContainer.setBaseY(this.stageHeight / 2 + this.stageHeight - targetHeight / 2);
+          }
+          if (presetPosition === 'center') {
+            thisFigureContainer.setBaseX(this.stageWidth / 2);
+          }
+          if (presetPosition === 'left') {
+            thisFigureContainer.setBaseX(targetWidth / 2);
+          }
+          if (presetPosition === 'right') {
+            thisFigureContainer.setBaseX(this.stageWidth - targetWidth / 2);
+          }
+          thisFigureContainer.pivot.set(0, this.stageHeight / 2);
+          thisFigureContainer.addChild(figureSprite);
         }
-        if (presetPosition === 'center') {
-          thisFigureContainer.setBaseX(this.stageWidth / 2);
-        }
-        if (presetPosition === 'left') {
-          thisFigureContainer.setBaseX(targetWidth / 2);
-        }
-        if (presetPosition === 'right') {
-          thisFigureContainer.setBaseX(this.stageWidth - targetWidth / 2);
-        }
-        thisFigureContainer.pivot.set(0, this.stageHeight / 2);
-        thisFigureContainer.addChild(figureSprite);
-      }
+      }, 0);
     };
 
     /**
@@ -527,12 +541,17 @@ export default class PixiStage {
   //
   //   // 挂载
   //   this.figureContainer.addChild(thisFigureContainer);
-  //   this.figureObjects.push({ uuid: uuid(), key: key, pixiContainer: thisFigureContainer, sourceUrl: jsonPath });
+  //   this.figureObjects.push({
+  //     uuid: uuid(),
+  //     key: key,
+  //     pixiContainer: thisFigureContainer,
+  //     sourceUrl: jsonPath,
+  //   });
   //
   //   const setup = () => {
   //     if (thisFigureContainer) {
   //       (async function () {
-  //         const models = await Promise.all([Live2DModel.from(jsonPath)]);
+  //         const models = await Promise.all([Live2DModel.from(jsonPath, { autoInteract: false })]);
   //
   //         models.forEach((model) => {
   //           const scaleX = stageWidth / model.width;
@@ -581,6 +600,41 @@ export default class PixiStage {
   //     setup();
   //   }
   // }
+
+  public changeModelMotionByKey(key: string, motion: string) {
+    // logger.debug(`Applying motion ${motion} to ${key}`);
+    const target = this.figureObjects.find((e) => e.key === key);
+    const figureRecordTarget = this.live2dFigureRecorder.find((e) => e.target === key);
+    if (target && figureRecordTarget?.motion !== motion) {
+      const container = target.pixiContainer;
+      const children = container.children;
+      for (const model of children) {
+        let category_name = motion;
+        let animation_index = 0;
+        let priority_number = 3; // @ts-ignore
+        const internalModel = model?.internalModel ?? undefined; // 安全访问
+        internalModel?.motionManager?.stopAllMotions?.();
+        // @ts-ignore
+        model.motion(category_name, animation_index, priority_number);
+      }
+      this.updateL2dMotionByKey(key, motion);
+    }
+  }
+
+  public changeModelExpressionByKey(key: string, expression: string) {
+    // logger.debug(`Applying expression ${expression} to ${key}`);
+    const target = this.figureObjects.find((e) => e.key === key);
+    const figureRecordTarget = this.live2dFigureRecorder.find((e) => e.target === key);
+    if (target && figureRecordTarget?.expression !== expression) {
+      const container = target.pixiContainer;
+      const children = container.children;
+      for (const model of children) {
+        // @ts-ignore
+        model.expression(expression);
+      }
+      this.updateL2dExpressionByKey(key, expression);
+    }
+  }
 
   /**
    * 根据 key 获取舞台上的对象
@@ -633,11 +687,29 @@ export default class PixiStage {
     PIXI.utils.clearTextureCache();
   }
 
+  private updateL2dMotionByKey(target: string, motion: string) {
+    const figureTargetIndex = this.live2dFigureRecorder.findIndex((e) => e.target === target);
+    if (figureTargetIndex >= 0) {
+      this.live2dFigureRecorder[figureTargetIndex].motion = motion;
+    } else {
+      this.live2dFigureRecorder.push({ target, motion, expression: '' });
+    }
+  }
+
+  private updateL2dExpressionByKey(target: string, expression: string) {
+    const figureTargetIndex = this.live2dFigureRecorder.findIndex((e) => e.target === target);
+    if (figureTargetIndex >= 0) {
+      this.live2dFigureRecorder[figureTargetIndex].expression = expression;
+    } else {
+      this.live2dFigureRecorder.push({ target, motion: '', expression });
+    }
+  }
+
   private loadAsset(url: string, callback: () => void) {
     /**
      * Loader 复用疑似有问题，转而采用先前的单独方式
      */
-    this.loadQueue.push({ url, callback });
+    this.loadQueue.unshift({ url, callback });
     /**
      * 尝试启动加载
      */
@@ -685,24 +757,13 @@ export default class PixiStage {
   }
 }
 
-export function updateCurrentEffects(newEffects: IEffect[]) {
-  // /**
-  //  * 更新当前 backlog 条目的 effects 记录
-  //  */
-  // if (!notUpdateBacklogEffects)
-  //   setTimeout(() => {
-  //     const backlog = RUNTIME_CURRENT_BACKLOG[RUNTIME_CURRENT_BACKLOG.length - 1];
-  //     if (backlog) {
-  //       const newBacklogItem = cloneDeep(backlog);
-  //       const backlog_effects = newBacklogItem.currentStageState.effects;
-  //       while (backlog_effects.length > 0) {
-  //         backlog_effects.pop();
-  //       }
-  //       backlog_effects.push(...newEffects);
-  //       RUNTIME_CURRENT_BACKLOG.pop();
-  //       RUNTIME_CURRENT_BACKLOG.push(newBacklogItem);
-  //     }
-  //   }, 50);
+function updateCurrentBacklogEffects(newEffects: IEffect[]) {
+  /**
+   * 更新当前 backlog 条目的 effects 记录
+   */
+  setTimeout(() => {
+    WebGAL.backlogManager.editLastBacklogItemEffect(cloneDeep(newEffects));
+  }, 50);
 
   webgalStore.dispatch(setStage({ key: 'effects', value: newEffects }));
 }
